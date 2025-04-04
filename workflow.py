@@ -42,15 +42,17 @@ class StockWorkflow:
         """Define edges for workflow transitions."""
         self.workflow.set_entry_point("fetch_stock_response")
 
-    def run(self, user_question: str):
+    def run(self, user_question: str) -> str:
         """Runs the LangGraph workflow with a user's question."""
         initial_state = StockState(question=user_question)
         
         # Execute the workflow
         result = self.executor.invoke(initial_state)
 
-        # Debug: Print the actual output structure
-        print("Workflow Output:", result)
-
-        # Extract response
-        return result.response if isinstance(result, StockState) else "No response found."
+        # Extract response correctly whether it's an object or dict
+        if isinstance(result, StockState):
+            return result.response
+        elif isinstance(result, dict) and "response" in result:
+            return result["response"]
+        else:
+            return "Error: Could not process the response."

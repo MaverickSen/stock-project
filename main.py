@@ -20,5 +20,5 @@ if __name__ == "__main__":
         # Send user input to workflow and get response
         response = workflow.run(user_input)
         
-        # Display the response
-        print("\nAssistant:", response)
+        # Display the response in the desired format
+        print(f"\nAssistant: {response}")
