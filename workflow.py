@@ -1,58 +1,73 @@
 from langgraph.graph import StateGraph
 from pydantic import BaseModel
-from agents.stock_agent import StockAgent
+from agents.stock_advisor import StockAdvisor
+from agents.tax_advisor import TaxAdvisor
+from openai import OpenAI
+from typing import Literal
 
-# Define the schema for LangGraph
-class StockState(BaseModel):
-    question: str
-    response: str = None
 
-class StockWorkflow:
+class PortfolioState(BaseModel):
+    stock_question: str = None
+    stock_response: str = None
+    tax_question: str = None
+    tax_response: str = None
+
+
+class PortfolioWorkflow:
     def __init__(self, file_path: str, api_key: str):
-        """
-        Initializes the LangGraph workflow for stock analysis.
+        self.stock_agent = StockAdvisor(file_path, api_key)
+        self.tax_agent = TaxAdvisor(api_key)
+        self.openai_client = OpenAI(api_key=api_key)
 
-        Args:
-            file_path (str): Path to the Excel file.
-            api_key (str): OpenAI API key.
-        """
-        self.agent = StockAgent(file_path, api_key)
-        
-        # Define the workflow graph with the correct state schema
-        self.workflow = StateGraph(StockState)
+        # Setup stock workflow
+        stock_graph = StateGraph(PortfolioState)
+        stock_graph.add_node("fetch_stock_response", self.fetch_stock_response)
+        stock_graph.set_entry_point("fetch_stock_response")
+        self.stock_executor = stock_graph.compile()
 
-        self.add_nodes()
-        self.define_edges()
+        # Setup tax workflow
+        tax_graph = StateGraph(PortfolioState)
+        tax_graph.add_node("fetch_tax_response", self.fetch_tax_response)
+        tax_graph.set_entry_point("fetch_tax_response")
+        self.tax_executor = tax_graph.compile()
 
-        # Compile the graph
-        self.executor = self.workflow.compile()
+    def fetch_stock_response(self, state: PortfolioState) -> PortfolioState:
+        response = self.stock_agent.ask_stock_question(state.stock_question)
+        return PortfolioState(stock_question=state.stock_question, stock_response=response)
 
-    def fetch_stock_response(self, state: StockState) -> StockState:
-        """Delegates user questions to StockAgent."""
-        return StockState(
-            question=state.question, 
-            response=self.agent.ask_question(state.question)
+    def fetch_tax_response(self, state: PortfolioState) -> PortfolioState:
+        response = self.tax_agent.ask_tax_question(state.tax_question)
+        return PortfolioState(tax_question=state.tax_question, tax_response=response)
+
+    def classify_query(self, query: str) -> Literal["stock", "tax"]:
+        """Uses GPT-4 to classify the query type."""
+        system_prompt = (
+            "You are a classifier that determines whether a user query is about stocks or taxes. "
+            "Only respond with 'stock' or 'tax'."
         )
 
-    def add_nodes(self):
-        """Define nodes for the LangGraph workflow."""
-        self.workflow.add_node("fetch_stock_response", self.fetch_stock_response)
+        response = self.openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query}
+            ],
+            max_tokens=1,
+            temperature=0
+        )
 
-    def define_edges(self):
-        """Define edges for workflow transitions."""
-        self.workflow.set_entry_point("fetch_stock_response")
+        result = response.choices[0].message.content.strip().lower()
+        return "tax" if "tax" in result else "stock"
 
-    def run(self, user_question: str) -> str:
-        """Runs the LangGraph workflow with a user's question."""
-        initial_state = StockState(question=user_question)
-        
-        # Execute the workflow
-        result = self.executor.invoke(initial_state)
+    def handle_query(self, question: str) -> str:
+        """Routes query to the appropriate agent using GPT classification."""
+        query_type = self.classify_query(question)
 
-        # Extract response correctly whether it's an object or dict
-        if isinstance(result, StockState):
-            return result.response
-        elif isinstance(result, dict) and "response" in result:
-            return result["response"]
+        if query_type == "tax":
+            state = PortfolioState(tax_question=question)
+            result = self.tax_executor.invoke(state)
+            return result["tax_response"]
         else:
-            return "Error: Could not process the response."
+            state = PortfolioState(stock_question=question)
+            result = self.stock_executor.invoke(state)
+            return result["stock_response"]
